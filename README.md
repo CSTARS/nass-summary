@@ -14,8 +14,9 @@ One unfortunate part of the process is getting the data in the first place.  The
 
 There is a lot of CENSUS data, so 
 
-* It seems like a good idea to get everything, so you only need to go here once, but it's better to limit the categories to things that you really need.  For example, if you only need acres and yields, you can get much more data by specifing these data items.  
-  * For example, for yields, you can select All COMMODITIES, and then select Data ITEMS; Area Harvested, Area in Production, Sales, Water Applied and Yield.  From that point you can get CA, ID,OR,WA,MT at about the per year basis.
+* It seems like a good idea to get everything, so you only need to go here once, but it's better to limit the categories to things that you really need.  For example, if you only need acres and yields, you can get much more data by specifing these data items.
+* Also think about limiting the DOMAIN.  You can really get down to production by selecting only the 'TOTAL' domain for example.
+* For example, for yields, you can select All COMMODITIES, and then select Data ITEMS; Area Harvested, Area in Production, Sales, Water Applied and Yield.  From that point you can get CA, ID,OR,WA,MT at about the per year basis.
 
 
 
