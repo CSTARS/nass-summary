@@ -107,18 +107,78 @@ by location,year,dataitem,value;
 
 -- ACRES  Harvested
 create or replace view location_harvested as
-select
-commodity, 
-CASE WHEN (countycode != '') THEN statefips||countycode 
-     WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
-     ELSE statefips END as location,
+with a as (
+ select q.*,
+ CASE WHEN (countycode != '') THEN statefips||countycode 
+      WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
+      ELSE statefips END as location,
+ to_number(value,'999999') as acres,
+ string_to_array(dataitem,' - ') as di
+ from quickstats q
+ where domain='TOTAL' and program='CENSUS' and
+ countycode != '' and
+ not value~'^\(.*\)'
+)
+select 
+commodity,
+location,
 year,
-to_number(value,'999999') as acres,
-regexp_replace(dataitem,'^'||commodity||'(\s*[,-]\s*(.*))?\s+-\s+[^-]+$','\2') as subcommodity,
-regexp_replace(dataitem,'.*-\s*([^-]+)$','\1') as item,
-dataitem
-from quickstats 
-where domain='TOTAL' and 
-countycode != '' and
-dataitem like '%ACRES HARVESTED' and 
-not value~'^\(.*\)';
+acres,
+string_to_array(regexp_replace(di[1],commodity||'(, )?',''),', ') as subcommodity,
+di[2] as item
+from a
+where
+di[2]='ACRES HARVESTED';
+
+create materialized view commodity_irrigated as 
+with i as (
+select 
+commodity,
+location,
+year,
+acres,
+subcommodity[1:array_length(subcommodity,1)-1] as subcommodity
+from location_harvested 
+where subcommodity[array_length(subcommodity,1)]='IRRIGATED'
+),
+n as (
+select 
+commodity,
+location,
+year,
+acres,
+subcommodity
+from location_harvested 
+where array_length(subcommodity,1) is null or 
+subcommodity[array_length(subcommodity,1)]!='IRRIGATED'
+)
+select 
+commodity,
+location,
+year,
+subcommodity,
+coalesce(array_length(subcommodity,1),0) as sub_len,
+i.acres as irrigated,n.acres as total
+from 
+n left join i using (commodity,location,year,subcommodity);
+
+create materialized view commodity_total_harvest as 
+with r as (
+select *,
+min(sub_len) OVER W as min,
+max(sub_len) OVER W as max
+from commodity_irrigated
+WINDOW W as (partition by commodity,location,year)
+)
+select 
+commodity,location,year,irrigated,total
+from r where max=0 and sub_len=0
+union 
+select 
+commodity,location,year,
+sum(irrigated) as irrigated,
+sum(total) as total
+from r where max !=0 and sub_len=1
+group by commodity,location,year;
+
+
