@@ -1,82 +1,4 @@
-Drop schema if exists nass cascade;
-create schema nass;
 set search_path=nass,public;
-
--- Quick stats puts all data in one standard table.  Survey and Census
-create table quickstats_old (
-Program text,
-Year integer,
-Period text,
-WeekEnding text,
-GeoLevel text,
-State text,
-StateFips char(2),
-AgDistrict text,
-AgDistrictCode text,
-County text,
-CountyCode char(5),
-ZipCode varchar(5),
-Region text,
-Watershed text,
-DataItem text,
-Domain text,
-DomainCategory text,
-Value text
-);
-
-create table quickstats (
-Program text,
-Year integer,
-Period text,
-WeekEnding text,
-GeoLevel text,
-State text,
-StateFips char(2),
-AgDistrict text,
-AgDistrictCode text,
-County text,
-CountyCode char(5),
-ZipCode varchar(5),
-Region text,
-WatershedCode text,
-Watershed text,
-Commodity text,
-DataItem text,
-Domain text,
-DomainCategory text,
-Value text,
-CV Text
-);
-
-
-create or replace function updateQuickStats() RETURNS bigint
-AS $$
-update quickstats 
-set Program=trim(both from Program),
-Period=trim(both from Period),
-WeekEnding=trim(both from WeekEnding),
-GeoLevel=trim(both from GeoLevel),
-State=trim(both from State),
-StateFips=trim(both from StateFips),
-AgDistrict=trim(both from AgDistrict),
-AgDistrictCode=trim(both from AgDistrictCode),
-County=trim(both from County),
-CountyCode=trim(both from CountyCode),
-ZipCode=trim(both from ZipCode),
-Region=trim(both from Region),
-WatershedCode=trim(both from WatershedCode),
-Watershed=trim(both from Watershed),
-Commodity=trim(both from Commodity),
-DataItem=trim(both from DataItem),
-Domain=trim(both from Domain),
-DomainCategory=trim(both from DomainCategory),
-Value=trim(both from Value),
-CV=trim(both from CV);
-
-select count(*) from quickstats;
-$$ LANGUAGE SQL;
-
---select "Value"::float from quickstats where "Value" not in (' (NA)',' (D)','',' (S)');
 
 -- Now we start to build our tables
 -- Crosswalk between counties and ag_districts
@@ -130,6 +52,34 @@ from a
 where
 di[2]='ACRES HARVESTED';
 
+create materialized view subcommodity_explicit_irrigation as 
+with i as (
+select distinct
+commodity,
+subcommodity[1:array_length(subcommodity,1)-1] as subcommodity
+from location_harvested 
+where subcommodity[array_length(subcommodity,1)]='IRRIGATED'
+),
+n as (
+select distinct
+commodity,
+subcommodity
+from location_harvested 
+where array_length(subcommodity,1) is null or 
+subcommodity[array_length(subcommodity,1)]!='IRRIGATED'
+)
+select 
+commodity,
+subcommodity,
+i is not null as irrigated
+from n left join i using (commodity,subcommodity);
+
+create or replace view commodity_explicit_irrigation as 
+select commodity,bool_or(irrigated) as irrigation
+from subcommodity_explicit_irrigation group by commodity;
+
+--\COPY (select * from commodity_explicit_irrigation order by 1) to commodity_explicit_irrigation.csv with csv header
+
 create materialized view commodity_irrigated as 
 with i as (
 select 
@@ -169,7 +119,8 @@ min(sub_len) OVER W as min,
 max(sub_len) OVER W as max
 from commodity_irrigated
 WINDOW W as (partition by commodity,location,year)
-)
+),
+n as (
 select 
 commodity,location,year,irrigated,total
 from r where max=0 and sub_len=0
@@ -179,6 +130,14 @@ commodity,location,year,
 sum(irrigated) as irrigated,
 sum(total) as total
 from r where max !=0 and sub_len=1
-group by commodity,location,year;
+group by commodity,location,year
+)
+select commodity,location,year,
+CASE WHEN (e.irrigation is false) THEN total ELSE coalesce(irrigated,0) END as irrigated,
+total-(CASE WHEN (e.irrigation is false) THEN total ELSE coalesce(irrigated,0) END) as non_irr,
+total as total
+from n join commodity_explicit_irrigation e using (commodity);
+
+--\COPY (select * from commodity_total_harvest order by 3,2,1) to commodity_total_harvest.csv with csv header;
 
 
