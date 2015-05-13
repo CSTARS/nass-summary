@@ -28,9 +28,9 @@ ${quickstats}:db/%:db/quickstats.sql
 	${PG} -c '\COPY nass.quickstats FROM $* CSV HEADER'
 	touch $@
 
-outs:=$(patsubst %,%.csv,county_adc land_rent \
-	commodity_explicit_irrigation commodity_total_harvest \
-	cmz_commodity_total_harvest )
+outs:=$(patsubst %,../%.csv,county_adc land_rent \
+	commodity_explicitly_irrigated commodity_harvest \
+	commodity_yield )
 
 db/nass.sql: ${quickstats}
 	${PG} -f nass.sql -d nass;
@@ -40,6 +40,6 @@ db/nass.sql: ${quickstats}
 .PHONY:outs
 outs:${outs}
 
-$(outs):%.csv:db/nass.sql
-	${PG} -c '\COPY (select * from nass.$*) to $*.csv with csv header';
+$(outs):../%.csv:db/nass.sql
+	${PG} -c '\COPY (select * from nass.$*) to $@ with csv header';
 

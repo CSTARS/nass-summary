@@ -1,6 +1,6 @@
---Drop schema if exists nass cascade;
---create schema nass;
-set search_path=nass,public;
+--Drop schema if exists quickstats cascade;
+--create schema quickstats;
+set search_path=quickstats,public;
 
 create table quickstats (
 Program text,
