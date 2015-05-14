@@ -148,7 +148,7 @@ with a as (
  CASE WHEN (countycode != '') THEN statefips||countycode 
       WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
       ELSE statefips END as location,
- to_number(value,'999999') as yield,
+ to_number(value,'999999.99') as yield,
  string_to_array(dataitem,' - ') as di
  from quickstats.quickstats q
  where domain='TOTAL' and program='SURVEY' and
