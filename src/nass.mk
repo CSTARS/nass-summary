@@ -30,11 +30,11 @@ ${quickstats}:db/%:db/quickstats.sql
 
 outs:=$(patsubst %,../%.csv,county_adc land_rent \
 	commodity_explicitly_irrigated commodity_harvest \
-	commodity_yield )
+	commodity_yield commodity_price )
 
 db/nass.sql: ${quickstats}
 	${PG} -f nass.sql -d nass;
-	${PG} -f nass_cmz.sql -d nass;
+#	${PG} -f nass_cmz.sql -d nass;
 	touch $@
 
 .PHONY:outs

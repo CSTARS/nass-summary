@@ -139,7 +139,8 @@ from harvest_total_and_sum
 where subcommodity='{}';
 
 
--- Yield is similar to production in that we need
+-- Yield is similar to production in that we need to summarize and
+-- aggregate the data.
 
 create or replace view yield_location as
 with a as (
@@ -277,4 +278,70 @@ create view commodity_yield as
 select commodity,location,year,unit,
 irrigated,non_irrigated,unspecified
 from yield_total_and_sum 
+where subcommodity='{}';
+
+-- Prices are aggreated, but we don't need to worry about irrigation.
+
+create or replace view price_location as
+with a as (
+ select q.*,
+ CASE WHEN (countycode != '') THEN statefips||countycode 
+      WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
+      ELSE statefips END as location,
+ to_number(value,'9999.99') as price,
+ string_to_array(dataitem,' - ') as di
+ from quickstats.quickstats q
+ where domain='TOTAL' and program='SURVEY' and period='YEAR' and
+ dataitem ~ ' - PRICE RECEIVED' and
+ not value~'^\(.*\)'
+)
+select distinct
+commodity,location,year,price,
+string_to_array(regexp_replace(di[1],commodity||'(, )?',''),', ') 
+  as subcommodity,
+'price'::text as item,
+regexp_replace(di[2],'^PRICE RECEIVED, MEASURED IN ','') as unit
+from a;
+
+-- This shows the sums of NASS from leaves alone
+create or replace view price_by_leaves as 
+with recursive b(commodity,location,year,subcommodity,unit,price) 
+as (
+select
+commodity,location,year,
+subcommodity,unit,price
+from price_location
+left join (
+ select commodity,location,year,
+ subcommodity[1:array_length(subcommodity,1)-1] as subcommodity,
+ unit
+from price_location ) as r
+using (commodity,location,year,subcommodity,unit) 
+where r is null
+union
+select commodity,location,year,
+subcommodity[1:array_length(subcommodity,1)-1] as subcommodity,
+unit,
+avg(price) over W
+from b where 
+array_length(subcommodity,1)>0
+WINDOW W as (partition by commodity,location,year,
+             subcommodity[1:array_length(subcommodity,1)-1],unit)
+) 
+select commodity,location,year,subcommodity,unit,
+avg(price)::decimal(8,2) as price
+from b
+group by commodity,location,year,subcommodity,unit;
+
+create or replace view price_total_and_sum as 
+select commodity,location,year,subcommodity,unit,
+t.price as t_price,s.price as s_price,
+coalesce(t.price,s.price) as price
+from price_location t full outer join
+price_by_leaves s using (commodity,location,year,subcommodity,unit)
+order by year,location,commodity,subcommodity,unit;
+
+create view commodity_price as 
+select commodity,location,year,unit,price
+from price_total_and_sum 
 where subcommodity='{}';
