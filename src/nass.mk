@@ -29,8 +29,8 @@ ${quickstats}:db/%:db/quickstats.sql
 	touch $@
 
 outs:=$(patsubst %,../%.csv,county_adc land_rent \
-	commodity_explicitly_irrigated commodity_harvest \
-	commodity_yield commodity_price )
+	commodity_harvest commodity_yield commodity_price \
+	commodity_list  )
 
 db/nass.sql: ${quickstats}
 	${PG} -f nass.sql -d nass;

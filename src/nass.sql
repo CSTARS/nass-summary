@@ -50,7 +50,7 @@ string_to_array(regexp_replace(di[1],commodity||'(, )?',''),', ')
 di[2] as item
 from a
 where
-di[2]='ACRES HARVESTED';
+di[2] in ('ACRES HARVESTED','ACRES BEARING');
 
 -- CENSUS data does NOT have NON-IRRIGATED however
 create view subcommodity_explicitly_irrigated as 
@@ -133,10 +133,15 @@ harvest_by_leaves s using (commodity,location,year,subcommodity)
 order by year,location,commodity,subcommodity;
 
 create view commodity_harvest as 
-select commodity,location,year,
-irrigated,total
-from harvest_total_and_sum 
-where subcommodity='{}';
+select 
+array_to_string(array_prepend(commodity,subcommodity),', ') as commodity,
+location,year,irrigated,total
+from nass.harvest_total_and_sum 
+order by year,location,commodity;
+
+create view commodity_harvest_list as 
+select distinct commodity from commodity_harvest
+order by commodity;
 
 
 -- Yield is similar to production in that we need to summarize and
@@ -275,10 +280,11 @@ yield_by_leaves s using (commodity,location,year,subcommodity,unit)
 order by year,location,commodity,subcommodity,unit;
 
 create view commodity_yield as 
-select commodity,location,year,unit,
-irrigated,non_irrigated,unspecified
-from yield_total_and_sum 
-where subcommodity='{}';
+select 
+array_to_string(array_prepend(commodity,subcommodity),', ') as commodity,
+location,year,unit,irrigated,non_irrigated,unspecified 
+from nass.yield_total_and_sum 
+order by year,location,commodity,unit;
 
 -- Prices are aggreated, but we don't need to worry about irrigation.
 
@@ -342,6 +348,22 @@ price_by_leaves s using (commodity,location,year,subcommodity,unit)
 order by year,location,commodity,subcommodity,unit;
 
 create view commodity_price as 
-select commodity,location,year,unit,price
-from price_total_and_sum 
-where subcommodity='{}';
+select 
+array_to_string(array_prepend(commodity,subcommodity),', ') as commodity,
+location,year,unit,price
+from nass.price_total_and_sum 
+order by year,location,commodity,unit;
+
+create view commodity_list as 
+with h as (select distinct commodity from commodity_harvest),
+y as (select distinct commodity from commodity_yield),
+p as (select distinct commodity from commodity_price)
+select 
+coalesce(h.commodity,y.commodity,p.commodity) as commodity,
+h is not null as harvest,
+y is not null as yield,
+p is not null as price
+from h full outer join y using (commodity)
+full outer join p using (commodity)
+order by commodity;
+
