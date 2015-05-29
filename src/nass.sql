@@ -29,28 +29,42 @@ where dataitem~'RENT, CASH,.*'
 order 
 by location,year,dataitem,value;
 
--- ACRES  Harvested
-create or replace view harvest_location as
+create materialized view stats_location as
 with a as (
  select q.*,
  CASE WHEN (countycode != '') THEN statefips||countycode 
       WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
       ELSE statefips END as location,
- to_number(value,'999999') as acres,
+ to_number(value,'999999') as value,
  string_to_array(dataitem,' - ') as di
  from quickstats.quickstats q
- where domain='TOTAL' and program='CENSUS' and
--- countycode != '' and
+ where period='YEAR' and
  not value~'^\(.*\)'
 )
-select 
+select distinct
 commodity,location,year,acres,
-string_to_array(regexp_replace(di[1],commodity||'(, )?',''),', ') 
-						    as subcommodity,
-di[2] as item
-from a
-where
-di[2] in ('ACRES HARVESTED','ACRES BEARING');
+--string_to_array(regexp_replace(di[1],commodity||'(, )?',''),', ') as commodity_a,
+string_to_array(di[1],', ') as commodity_a,
+string_to_array(di[2],', ') as item_a,
+di[2] as item,
+dataitem
+from a;
+
+-- ACRES  Harvested
+create or replace view harvest_location as
+select commodity,location,year,value as acres,
+array_remove(commodity_a,commodity) as subcommodity,
+item_a
+from stats_location 
+where item_a[1] in ('ACRES HARVESTED','ACRES BEARING','ACRES IN PRODUCTION');
+
+create or replace view production_location as
+select *,
+array_remove(commodity_a,commodity) as subcommodity
+from stats_location 
+where item_a[1] in ('PRODUCTION');
+
+
 
 -- CENSUS data does NOT have NON-IRRIGATED however
 create view subcommodity_explicitly_irrigated as 
@@ -118,7 +132,7 @@ sum(irrigated) as irrigated,sum(total) as total
 from b
 group by commodity,location,year,subcommodity;
 
--- This is an attempt to capture the total amount of production from
+-- This is an attempt to capture the total amount of harvest from
 -- the nass statistics for each location and commodity.  It creates
 -- the missing tree values, but uses them when they exist.
 
@@ -144,7 +158,7 @@ select distinct commodity from commodity_harvest
 order by commodity;
 
 
--- Yield is similar to production in that we need to summarize and
+-- Yield is similar to harvests in that we need to summarize and
 -- aggregate the data.
 
 create or replace view yield_location as

@@ -25,7 +25,7 @@ quickstats:=$(patsubst %,db/%,$(shell echo quickstats/*.csv))
 quickstats:${quickstats}
 
 ${quickstats}:db/%:db/quickstats.sql
-	${PG} -c '\COPY nass.quickstats FROM $* CSV HEADER'
+	${PG} -c '\COPY quickstats.quickstats_raw FROM $* CSV HEADER'
 	touch $@
 
 outs:=$(patsubst %,../%.csv,county_adc land_rent \
@@ -33,6 +33,7 @@ outs:=$(patsubst %,../%.csv,county_adc land_rent \
 	commodity_list  )
 
 db/nass.sql: ${quickstats}
+	${PG} -c 'truncate quickstats.quickstats; insert into quickstats.quickstats select distinct * from quickstats.quickstats_raw'
 	${PG} -f nass.sql -d nass;
 #	${PG} -f nass_cmz.sql -d nass;
 	touch $@
