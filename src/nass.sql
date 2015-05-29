@@ -35,14 +35,14 @@ with a as (
  CASE WHEN (countycode != '') THEN statefips||countycode 
       WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
       ELSE statefips END as location,
- to_number(value,'999999') as value,
+ to_number(value,'999999') as value_number,
  string_to_array(dataitem,' - ') as di
  from quickstats.quickstats q
  where period='YEAR' and
  not value~'^\(.*\)'
 )
 select distinct
-commodity,location,year,acres,
+commodity,location,year,value_number as value,
 --string_to_array(regexp_replace(di[1],commodity||'(, )?',''),', ') as commodity_a,
 string_to_array(di[1],', ') as commodity_a,
 string_to_array(di[2],', ') as item_a,
@@ -59,11 +59,12 @@ from stats_location
 where item_a[1] in ('ACRES HARVESTED','ACRES BEARING','ACRES IN PRODUCTION');
 
 create or replace view production_location as
-select *,
-array_remove(commodity_a,commodity) as subcommodity
+select commodity,location,year,value as production,
+regexp_replace(item_a[2],'MEASURED IN ','') as unit,
+array_remove(commodity_a,commodity) as subcommodity,
+item_a[3:10] as subproduction
 from stats_location 
 where item_a[1] in ('PRODUCTION');
-
 
 
 -- CENSUS data does NOT have NON-IRRIGATED however
