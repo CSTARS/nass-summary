@@ -4,7 +4,7 @@
 ## May-2015 
 setwd('~/Documents/GSR/budget/')
 
-yukey = "YOUR API KEY"
+yukey = ""
 states = c('06', '16', '30', '41', '53')
 ## Specify What, Where, and When
 getArea = function(mykey = yukey, year= 2005, state = states[1], verbose = FALSE){
@@ -120,14 +120,6 @@ for(yr in 2005:2014){
 
 ######### Under construction
 
-
-
-
-
-
-
-
-aa = getURL('http://quickstats.nass.usda.gov/api/get_param_values/?key=BBD12288-8892-3A35-8F67-4AC2E884391E&param=commodity_desc')
 
 ## SURVEY vs CENSUS
 
