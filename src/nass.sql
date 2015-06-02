@@ -35,10 +35,11 @@ with a as (
  CASE WHEN (countycode != '') THEN statefips||countycode 
       WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
       ELSE statefips END as location,
- to_number(value,'999999') as value_number,
+ to_number(value,'9999999999D99') as value_number,
  string_to_array(dataitem,' - ') as di
  from quickstats.quickstats q
  where period='YEAR' and
+ domain='TOTAL' and program='CENSUS' and
  not value~'^\(.*\)'
 )
 select distinct
@@ -51,7 +52,7 @@ dataitem
 from a;
 
 -- ACRES  Harvested
-create or replace view harvest_location as
+create or replace view acres_location as
 select commodity,location,year,value as acres,
 array_remove(commodity_a,commodity) as subcommodity,
 item_a
@@ -66,6 +67,16 @@ item_a[3:10] as subproduction
 from stats_location 
 where item_a[1] in ('PRODUCTION');
 
+create or replace view harvest_location as
+with h as (
+select commodity,location,year,subcommodity,max(acres) as acres
+from acres_location 
+group by commodity,location,year,subcommodity
+)
+select commodity,location,year,subcommodity,
+acres,production,unit
+from production_location p 
+full outer join h using (commodity,location,year,subcommodity);
 
 -- CENSUS data does NOT have NON-IRRIGATED however
 create view subcommodity_explicitly_irrigated as 
@@ -80,17 +91,18 @@ from subcommodity_explicitly_irrigated;
 
 --\COPY (select * from commodity_explicit_irrigation order by 1) to commodity_explicit_irrigation.csv with csv header
 
-create materialized view harvest_location_irrigated as 
+-- There are not PRODUCTION estimates for 'IRRIGATED' subcommodities
+create view harvest_location_irrigated as 
 with i as (
 select 
-commodity,location,year,acres,
+commodity,location,year,acres,production,unit,
 array_remove(subcommodity,'IRRIGATED') as subcommodity
 from harvest_location 
 where 'IRRIGATED' = ANY (subcommodity)
 ),
 n as (
 select 
-commodity,location,year,acres,
+commodity,location,year,acres,production,unit,
 subcommodity
 from harvest_location 
 where not 'IRRIGATED'= ANY (subcommodity)
@@ -98,19 +110,23 @@ where not 'IRRIGATED'= ANY (subcommodity)
 select 
 commodity,location,year,subcommodity,
 s is not null as explicitly_irrigated,
-i.acres as irrigated,
-coalesce(n.acres,i.acres) as total
+i.acres as irrigated_acres,
+coalesce(n.acres,i.acres) as total_acres,
+n.production as total_production,
+n.unit
 from 
 n full outer join i using (commodity,location,year,subcommodity) 
 left join subcommodity_explicitly_irrigated s using (commodity,subcommodity);
 
 -- This shows the sums of NASS from leaves alone
 create view harvest_by_leaves as 
-with recursive b(commodity,location,year,subcommodity,irrigated,total) 
+with recursive b(commodity,location,year,subcommodity,irrigated_acres,total_acres,total_production,unit) 
 as (
 select
 commodity,location,year,
-subcommodity,irrigated,total 
+subcommodity,
+irrigated_acres,total_acres, 
+total_production,unit
 from harvest_location_irrigated 
 left join (
  select commodity,location,year,
@@ -121,17 +137,21 @@ where r is null
 union
 select commodity,location,year,
 subcommodity[1:array_length(subcommodity,1)-1] as subcommodity,
-sum(irrigated) over W as irrigated,
-sum(total) over W as total
+sum(irrigated_acres) over W as irrigated_acres,
+sum(total_acres) over W as total_acres,
+sum(total_production) over W as total_production,unit
 from b where 
 array_length(subcommodity,1)>0
 WINDOW W as (partition by commodity,location,year,
              subcommodity[1:array_length(subcommodity,1)-1])
 ) 
 select commodity,location,year,subcommodity,
-sum(irrigated) as irrigated,sum(total) as total
+--irrigated_acres,total_acres,
+--total_production
+sum(irrigated_acres) as irrigated_acres,sum(total_acres) as total_acres,
+sum(total_production) as total_production,unit
 from b
-group by commodity,location,year,subcommodity;
+group by commodity,location,year,subcommodity,unit;
 
 -- This is an attempt to capture the total amount of harvest from
 -- the nass statistics for each location and commodity.  It creates
@@ -139,18 +159,24 @@ group by commodity,location,year,subcommodity;
 
 create materialized view harvest_total_and_sum as 
 select commodity,location,year,subcommodity,
-t.irrigated as t_irrigated,t.total as t_total,
-s.irrigated as s_irrigated,s.total as s_total,
-greatest(t.irrigated,s.irrigated) as irrigated,
-greatest(t.total,s.total) as total
+(t.commodity is not null) as reported,
+t.irrigated_acres as t_irrigated_acres,t.total_acres as t_total_acres,
+s.irrigated_acres as s_irrigated_acres,s.total_acres as s_total_acres,
+greatest(t.irrigated_acres,s.irrigated_acres) as irrigated_acres,
+greatest(t.total_acres,s.total_acres) as total_acres,
+t.total_production as t_total_production,
+s.total_production as s_total_production,
+greatest(t.total_production,s.total_production) as total_production,
+unit
 from harvest_location_irrigated t full outer join
-harvest_by_leaves s using (commodity,location,year,subcommodity)
+harvest_by_leaves s using (commodity,location,year,subcommodity,unit)
 order by year,location,commodity,subcommodity;
 
 create view commodity_harvest as 
 select 
 array_to_string(array_prepend(commodity,subcommodity),', ') as commodity,
-location,year,irrigated,total
+location,year,reported,
+irrigated_acres,total_acres,total_production,unit
 from nass.harvest_total_and_sum 
 order by year,location,commodity;
 
@@ -162,64 +188,63 @@ order by commodity;
 -- Yield is similar to harvests in that we need to summarize and
 -- aggregate the data.
 
-create or replace view yield_location as
-with a as (
- select q.*,
- CASE WHEN (countycode != '') THEN statefips||countycode 
-      WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
-      ELSE statefips END as location,
- to_number(value,'999999.99') as yield,
- string_to_array(dataitem,' - ') as di
- from quickstats.quickstats q
- where domain='TOTAL' and program='SURVEY' and
- dataitem ~ ' - YIELD' and
- not value~'^\(.*\)'
-)
-select 
-commodity,location,year,yield,
-string_to_array(regexp_replace(di[1],commodity||'(, )?',''),', ') 
-  as subcommodity,
-'YIELD'::text as item,
-regexp_replace(di[2],'^YIELD, MEASURED IN ','') as unit
-from a;
+-- create or replace view yield_location as
+-- with a as (
+--  select q.*,
+--  CASE WHEN (countycode != '') THEN statefips||countycode 
+--       WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
+--       ELSE statefips END as location,
+--  to_number(value,'999999.99') as yield,
+--  string_to_array(dataitem,' - ') as di
+--  from quickstats.quickstats q
+--  where domain='TOTAL' and program='SURVEY' and
+--  dataitem ~ ' - YIELD' and
+--  not value~'^\(.*\)'
+-- )
+-- select 
+-- commodity,location,year,yield,
+-- string_to_array(regexp_replace(di[1],commodity||'(, )?',''),', ') 
+--   as subcommodity,
+-- 'YIELD'::text as item,
+-- regexp_replace(di[2],'^YIELD, MEASURED IN ','') as unit
+-- from a;
 
--- SURVEY data does NON-IRRIGATED however
-create view yield_explicitly_irrigated as 
-with i as (
- select distinct commodity,
- array_remove(subcommodity,'IRRIGATED') as subcommodity,
- unit,
- true as irrigated
- from yield_location
- where 'IRRIGATED'=ANY (subcommodity)
-),
-n as (
- select distinct commodity,
- array_remove(subcommodity,'NON-IRRIGATED') as subcommodity,
- unit,
- true as non_irrigated
- from yield_location
- where 'NON-IRRIGATED'=ANY (subcommodity)
-)
-select commodity,subcommodity,unit,i.irrigated,n.non_irrigated
-from i full outer join n using(commodity,subcommodity,unit);
+create or replace view yield_location as
+select 
+commodity,location,year,value as yield,
+regexp_replace(item_a[2],'MEASURED IN ','') as unit,
+array_remove(commodity_a,commodity) as subcommodity,
+item_a[3:10] as subyield
+from stats_location where item_a[1] in ('YIELD');
+
 
 create materialized view yield_location_irrigated as 
 with i as (
 select 
 commodity,location,year,yield,
-array_remove(subcommodity,'IRRIGATED') as subcommodity,
+array_remove(array_remove(subcommodity,'IRRIGATED'),'ENTIRE CROP') as subcommodity,
 unit
 from yield_location 
-where 'IRRIGATED' = ANY (subcommodity)
+where 'IRRIGATED' = ANY (subcommodity) and
+'ENTIRE CROP' = ANY(subcommodity)
+),
+p as (
+select 
+commodity,location,year,yield,
+array_remove(array_remove(subcommodity,'IRRIGATED'),'PART OF CROP') as subcommodity,
+unit
+from yield_location 
+where 'IRRIGATED' = ANY (subcommodity) and
+'PART OF CROP' = ANY(subcommodity)
 ),
 n as (
 select 
 commodity,location,year,yield,
-array_remove(subcommodity,'NON-IRRIGATED') as subcommodity,
+array_remove(array_remove(subcommodity,'IRRIGATED'),'NONE OF CROP') as subcommodity,
 unit
 from yield_location 
-where 'NON-IRRIGATED'= ANY (subcommodity)
+where 'IRRIGATED'= ANY (subcommodity) and
+'NONE OF CROP' = ANY(subcommodity)
 ),
 u as (
 select 
@@ -227,30 +252,29 @@ commodity,location,year,yield,
 subcommodity,
 unit
 from yield_location 
-where not 'IRRIGATED'= ANY (subcommodity) and
-not 'NON-IRRIGATED'= ANY (subcommodity)
+where not 'IRRIGATED'= ANY (subcommodity)
 )
 select 
 commodity,location,year,subcommodity,unit,
-coalesce(s.irrigated,false) as explicitly_irrigated,
-coalesce(s.non_irrigated,false) as explicitly_non_irrigated,
 i.yield as irrigated,
-n.yield as non_irrigated,
+p.yield as partial,
+n.yield as none,
 u.yield as unspecified
 from 
-n full outer join i using (commodity,location,year,subcommodity,unit)
-full outer join u using (commodity,location,year,subcommodity,unit)
-left join yield_explicitly_irrigated s using (commodity,subcommodity,unit);
+i full outer join p using (commodity,location,year,subcommodity,unit)
+full outer join n using (commodity,location,year,subcommodity,unit)
+full outer join u using (commodity,location,year,subcommodity,unit);
+
 
 -- This shows the sums of NASS from leaves alone
 create view yield_by_leaves as 
 with recursive b(commodity,location,year,subcommodity,unit,irrigated,
-                 non_irrigated,unspecified) 
+                 partial,none,unspecified) 
 as (
 select
 commodity,location,year,
 subcommodity,unit,
-irrigated,non_irrigated,unspecified
+irrigated,partial,none,unspecified
 from yield_location_irrigated 
 left join (
  select commodity,location,year,
@@ -264,7 +288,8 @@ select commodity,location,year,
 subcommodity[1:array_length(subcommodity,1)-1] as subcommodity,
 unit,
 avg(irrigated) over W as irrigated,
-avg(non_irrigated) over W as non_irrigated,
+avg(partial) over W as partial,
+avg(none) over W as none,
 avg(unspecified) over W as unspecified
 from b where 
 array_length(subcommodity,1)>0
@@ -273,7 +298,8 @@ WINDOW W as (partition by commodity,location,year,
 ) 
 select commodity,location,year,subcommodity,unit,
 avg(irrigated)::decimal(8,2) as irrigated,
-avg(non_irrigated)::decimal(8,2) as non_irrigated,
+avg(partial)::decimal(8,2) as partial,
+avg(none)::decimal(8,2) as none,
 avg(unspecified)::decimal(8,2) as unspecified
 from b
 group by commodity,location,year,subcommodity,unit;
@@ -282,13 +308,16 @@ group by commodity,location,year,subcommodity,unit;
 create materialized view yield_total_and_sum as 
 select commodity,location,year,subcommodity,unit,
 t.irrigated as t_irrigated,
-t.non_irrigated as t_non_irrigated,
+t.partial as t_partial,
+t.none as t_none,
 t.unspecified as t_unspecified,
 s.irrigated as s_irrigated,
-s.non_irrigated as s_non_irrigated,
+s.none as s_none,
+s.partial as s_partial,
 s.unspecified as s_unspecified,
 coalesce(t.irrigated,s.irrigated) as irrigated,
-coalesce(t.non_irrigated,s.non_irrigated) as non_irrigated,
+coalesce(t.none,s.none) as none,
+coalesce(t.partial,s.partial) as partial,
 coalesce(t.unspecified,s.unspecified) as unspecified
 from yield_location_irrigated t full outer join
 yield_by_leaves s using (commodity,location,year,subcommodity,unit)
@@ -297,7 +326,7 @@ order by year,location,commodity,subcommodity,unit;
 create view commodity_yield as 
 select 
 array_to_string(array_prepend(commodity,subcommodity),', ') as commodity,
-location,year,unit,irrigated,non_irrigated,unspecified 
+location,year,unit,irrigated,partial,none,unspecified 
 from nass.yield_total_and_sum 
 order by year,location,commodity,unit;
 
@@ -382,3 +411,71 @@ from h full outer join y using (commodity)
 full outer join p using (commodity)
 order by commodity;
 
+create or replace view commodity_county_yield as 
+with f as (
+ select distinct commodity,fips,adc,substr(fips,1,2) as state
+ from commodity_harvest
+ join county_adc  on (location=fips) 
+ where location~'.....'
+),
+u as (
+ select distinct commodity,unit 
+ from commodity_harvest where unit is not null
+), 
+c as (
+ select commodity,location as fips,
+ avg((total_production/total_acres))::decimal(10,2) as yield,
+ unit
+ from commodity_harvest 
+ where total_acres is not null 
+ and total_production is not null and 
+ location~'.....' 
+ group by commodity,location,unit
+), 
+a as (
+ select commodity,
+ adc,
+ avg(yield)::decimal(10,2) as yield,unit
+ from c join county_adc using (fips) 
+ group by commodity,adc,unit 
+ order by commodity,adc,unit
+), 
+s as (
+ select commodity,
+ substr(fips,1,2) as state,
+ avg(yield)::decimal(10,2) as yield,
+ unit 
+ from c 
+ group by commodity,substr(fips,1,2),unit
+),
+sy as (
+ select commodity,
+ regexp_replace(unit,' / ACRE','') as unit,
+ location as state,
+ avg(irrigated)::decimal(10,2) as irrigated,
+ avg(partial)::decimal(10,2) as partial,
+ avg(none)::decimal(10,2) as none,
+ avg(unspecified)::decimal(10,2) as unspecified 
+from commodity_yield 
+group by commodity,unit,location
+),
+al as (
+select commodity,fips,adc,state,unit,
+c.yield as county_yield,
+a.yield as ad_yield,
+s.yield as st_yield
+from f join u using (commodity)
+left join c using (commodity,fips,unit) 
+left join a using (commodity,adc,unit)
+left join s using (commodity,state,unit)
+)
+select 
+commodity,unit,fips,adc,state,
+coalesce(county_yield,ad_yield,st_yield,partial) as yield,
+county_yield,ad_yield,st_yield,
+irrigated as st_irrigated,
+partial as st_partial,
+none as st_none
+from al full outer join sy 
+using (commodity,state,unit)
+order by commodity;
