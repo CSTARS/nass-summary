@@ -4,13 +4,34 @@ set search_path=nass,public;
 
 -- Now we start to build our tables
 -- Crosswalk between counties and ag_districts
-create view county_adc as 
+create table location as
 select distinct 
-statefips||countycode as fips,
-statefips||'ag'||agdistrictcode as adc,
-state,agdistrict,county 
-from quickstats.quickstats 
-where countycode !='' and agdistrictcode!='';
+ (state_fips_code||county_code)::varchar(12) as location,
+ county_name||', '||state_alpha as name 
+ from usda_region 
+ where county_code NOT in ('') 
+union  
+ select distinct 
+ (state_fips_code||'ag'||asd_code)::varchar(12) as location,
+ asd_name||', '||state_alpha as name 
+ from usda_region 
+ where asd_code NOT in ('') 
+union  
+select distinct 
+ state_fips_code::varchar(12) as location,
+ state_alpha as name 
+ from quickstats.usda_region
+order by 1;
+
+-- Shows 
+create table county_adc as
+select distinct 
+(state_fips_code||county_code)::varchar(12) as fips,
+(state_fips_code||'ag'||asd_code)::varchar(12) as asd,
+state_fips_code as state_fips 
+from quickstats.usda_region 
+where county_code NOT in ('') 
+order by 1;
 
 -- Land Rent (From Survey data)
 create view land_rent as
@@ -28,6 +49,61 @@ from quickstats.quickstats
 where dataitem~'RENT, CASH,.*' 
 order 
 by location,year,dataitem,value;
+
+-- Survey yield data
+create or replace view explicit_yield as 
+select 
+year::integer,
+commodity_desc||
+ CASE WHEN (class_desc='ALL CLASSES') THEN '' 
+ ELSE ', '||class_desc END ||
+ CASE WHEN (util_practice_desc='ALL UTILIZATION PRACTICES') THEN '' 
+ ELSE ', '||util_practice_desc END as commodity,
+CASE WHEN (agg_level_desc='AGRICULTURAL DISTRICT') then state_fips_code||'ag'||asd_code 
+WHEN (agg_level_desc='COUNTY') then state_fips_code || county_code 
+WHEN (agg_level_desc='STATE') THEN state_fips_code 
+ELSE 'none' END as location,
+prodn_practice_desc,
+to_number(value,'9999999999D99') as value,
+unit_desc as unit
+from usda_api 
+where statisticcat_desc='YIELD' and
+agg_level_desc in ('AGRICULTURAL DISTRICT','COUNTY','STATE')
+and domain_desc='TOTAL'
+and freq_desc='ANNUAL'
+and reference_period_desc='YEAR'
+and not value ~'\(.*\)';
+
+create or replace view yield_by_type as
+with n as (
+select 
+year,commodity,location,avg(value)::decimal(10,2) as value,unit
+from explicit_yield
+where prodn_practice_desc in ('IN THE OPEN, NON-IRRIGATED','IRRIGATED, NONE OF CROP',
+'NON-IRRIGATED','NON-IRRIGATED, CONTINUOUS CROP','NON-IRRIGATED, FOLLOWING SUMMER FALLOW')
+group by year,commodity,location,unit
+),
+i as (
+select
+year,commodity,location,avg(value)::decimal(10,2) as value,unit
+from explicit_yield
+ where
+ prodn_practice_desc in('IN THE OPEN, IRRIGATED','IRRIGATED','IRRIGATED, ENTIRE CROP')
+group by year,commodity,location,unit
+),
+t as (
+select 
+year,commodity,location,avg(value)::decimal(10,2) as value,unit
+from explicit_yield
+ where
+ prodn_practice_desc in('ALL PRODUCTION PRACTICES','IN THE OPEN')
+group by year,commodity,location,unit
+)
+select year,commodity,location,unit,n.value as nonirrigated,
+i.value as irrigated, t.value as total
+from n full outer join i using (year,commodity,location,unit)
+full outer join t using (year,commodity,location,unit)
+order by 1,2,3;
 
 create materialized view stats_location as
 with a as (
@@ -184,30 +260,6 @@ create view commodity_harvest_list as
 select distinct commodity from commodity_harvest
 order by commodity;
 
-
--- Yield is similar to harvests in that we need to summarize and
--- aggregate the data.
-
--- create or replace view yield_location as
--- with a as (
---  select q.*,
---  CASE WHEN (countycode != '') THEN statefips||countycode 
---       WHEN (agdistrictcode != '') THEN statefips||'ag'||agdistrictcode 
---       ELSE statefips END as location,
---  to_number(value,'999999.99') as yield,
---  string_to_array(dataitem,' - ') as di
---  from quickstats.quickstats q
---  where domain='TOTAL' and program='SURVEY' and
---  dataitem ~ ' - YIELD' and
---  not value~'^\(.*\)'
--- )
--- select 
--- commodity,location,year,yield,
--- string_to_array(regexp_replace(di[1],commodity||'(, )?',''),', ') 
---   as subcommodity,
--- 'YIELD'::text as item,
--- regexp_replace(di[2],'^YIELD, MEASURED IN ','') as unit
--- from a;
 
 create or replace view yield_location as
 select 
